@@ -6,6 +6,8 @@ import time
 from facenet_pytorch import MTCNN, InceptionResnetV1
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+# device = torch.device('cpu')
+
 print('Running on device: {}'.format(device))
 
 
@@ -15,26 +17,30 @@ def preprocess_frame(frame):
   return frame_rgb
 
 
+
 def get_embeddings(frame_rgb, mtcnn, resnet):
-  """Detects faces, aligns them, and calculates embeddings."""
-  boxes, _ = mtcnn.detect(frame_rgb, landmarks=False)
-  if boxes is None:
-      return None, None
+    """Detects faces, aligns them, and calculates embeddings."""
+    boxes, _ = mtcnn.detect(frame_rgb, landmarks=False)
+    if boxes is None:
+        return None, None
 
-  aligned_faces = []
-  for box in boxes:
-      # Convert bounding box coordinates to integers
-      x1, y1, x2, y2 = map(int, box)  # Use map for type conversion
-      cropped_face = frame_rgb[y1:y2, x1:x2]
-      if cropped_face.size == 0:
-          continue
-      aligned_face = cv2.resize(cropped_face, (160, 160))
-      aligned_faces.append(aligned_face)
+    aligned_faces = []
+    for box in boxes:
+        # Convert bounding box coordinates to integers
+        x1, y1, x2, y2 = map(int, box)
+        cropped_face = frame_rgb[y1:y2, x1:x2]
+        if cropped_face.size == 0:
+            continue
+        aligned_face = cv2.resize(cropped_face, (160, 160))  # Resize to a fixed size
+        aligned_faces.append(aligned_face)
 
-  aligned_faces = np.array(aligned_faces)
-  aligned_faces = torch.tensor(aligned_faces).permute(0, 3, 1, 2).float().to(device)
-  embeddings = resnet(aligned_faces).detach().cpu()
-  return boxes,embeddings
+    aligned_faces = np.array(aligned_faces)
+    if len(aligned_faces) == 0:
+        return None, None  # No valid faces found
+
+    aligned_faces = torch.tensor(aligned_faces).permute(0, 3, 1, 2).float().to(device)
+    embeddings = resnet(aligned_faces).detach().cpu()
+    return boxes, embeddings
 
 
 # Define MTCNN and InceptionResnetV1 modules
@@ -48,7 +54,7 @@ resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
 
 
 # Open the video file
-video_file = '/home/fadymaher/git-fedora/face_recognition_haibco/data/Grocery-Shopping.mp4'
+video_file = '/home/fadymaher/git-fedora/face_recognition_haibco/data/People-Walking.mp4'
 video = cv2.VideoCapture(video_file)
 
 # Define video writer for saving output
@@ -71,7 +77,7 @@ while True:
 
     frame_count += 1
 
-    # Skip processing every 5th frame for performance
+    # # Skip processing every 5th frame for performance
     if frame_count % 5 != 0:
         continue
 
@@ -83,7 +89,7 @@ while True:
             print('No faces detected by MTCNN')
             continue
 
-        # Process the embeddings (e.g., recognition logic here)
+        # Process the embeddings (recognition logic)
         # ...
 
         # Display the bounding boxes
