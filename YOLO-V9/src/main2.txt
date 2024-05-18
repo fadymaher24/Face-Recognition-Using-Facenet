@@ -1,0 +1,162 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
+from ultralytics.utils.checks import check_imshow
+from ultralytics.utils.plotting import Annotator, colors
+
+from collections import defaultdict
+import dlib  # For MTCNN face detection and recognition
+import subprocess
+
+
+def resize_frame(frame, scale_percent):
+    """Function to resize an image by a percentage scale."""
+    width = int(frame.shape[1] * scale_percent / 100)
+    height = int(frame.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    resized = cv2.resize(frame, dim, interpolation=cv2.INTER_AREA)
+    return resized
+
+
+def detect_and_recognize_faces(detector, gray, face):
+    """
+    Detects and recognizes faces in a given image region using MTCNN.
+
+    Args:
+        detector: The face detector object (dlib.cnn_face_detection_model_v1).
+        gray: The grayscale image containing a potential face.
+        face: The face region detected by the detector.
+
+    Returns:
+        A list containing the face bounding box and recognition result (if applicable).
+    """
+
+    try:
+        # Extract face bounding box coordinates
+        (x, y, w, h) = face.rect.left(), face.rect.top(), face.rect.right(), face.rect.bottom()
+
+        # (Optional) Perform face recognition using MTCNN landmarks (or a separate model)
+        # ... Implement face recognition logic using landmarks or a model ...
+        MTCNN = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
+        # Perform face recognition using MTCNN landmarks (optional)
+        landmarks = MTCNN(gray, face.rect)
+
+        # Return face information
+        return {"bbox": (x, y, w, h)}
+
+    except Exception as e:
+        print(f"Error during face detection/recognition: {e}")
+        return []
+
+
+def main():
+    # Load YOLO model (assuming you have a pre-trained YOLOv9c model)
+    model = YOLO("yolov9c.pt")
+    
+    names = model.model.names
+
+    # Load MTCNN face detector (optional for face recognition)
+    detector = dlib.cnn_face_detection_model_v1('mmod_human_face_detector.dat')
+
+    # Video capture setup (replace with your video source)
+    cap = cv2.VideoCapture("/home/fadymaher/git-fedora/face_recognition-YOLO/YOLO-V9/data/People-Walking.mp4")
+    if not cap.isOpened():
+        print("Error opening video capture device.")
+        return
+
+    # Output video setup
+    w, h, fps = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                 int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                 cap.get(cv2.CAP_PROP_FPS))
+    output_video_file = '/home/fadymaher/git-fedora/face_recognition-YOLO/YOLO-V9/output/object_tracking_with_recognition.mp4'
+    # result = cv2.VideoWriter(output_video_file, cv2.VideoWriter_fourcc(*'XVID'), fps, (w, h))
+    ffmpeg_cmd = [
+        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo', '-s', f'{w}x{h}', '-pix_fmt', 'bgr24', '-r', str(fps),
+        '-i', '-', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', output_video_file
+    ]
+    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+    # Track history dictionary
+    track_history = defaultdict(lambda: [])
+
+    while cap.isOpened():
+        success, frame = cap.read()
+        if not success:
+            print("Error reading frame from video capture.")
+            break
+        frame_resized = resize_frame(frame, 50)  # Resize frame to 50% for faster processing
+
+        # Perform YOLO object detection and tracking
+        results = model.track(frame, persist=True, verbose=False)
+        boxes = results[0].boxes.xyxy
+
+        if results[0].boxes.id is not None:
+            # Extract prediction results
+            clss = results[0].boxes.cls.tolist()
+            track_ids = results[0].boxes.id.int().tolist()
+            confs = results[0].boxes.conf.float().tolist()
+
+            # Annotator for drawing labels and boxes
+            annotator = Annotator(frame, line_width=2)
+
+            for box, cls, track_id in zip(boxes, clss, track_ids):
+                # Check if the detected class is "person" (or your desired class)
+                if names[int(cls)] == "person":
+                        
+                    # Draw bounding box and label
+                    annotator.box_label(box, color=colors(int(cls), True), label=f"{names[int(cls)]} (ID: {track_id})")
+
+                    # Extract the person's bounding box
+                    x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                    person_roi = frame[y1:y2, x1:x2]
+
+                    # Convert to grayscale (MTCNN works better with grayscale)
+                    gray = cv2.cvtColor(person_roi, cv2.COLOR_BGR2GRAY)
+
+                    # Perform face recognition using MTCNN (optional)
+                    faces = detector(gray, 1)
+                    face_results = [detect_and_recognize_faces(detector, gray, face) for face in faces]
+
+                    # Draw face bounding boxes and recognition results (if applicable)
+                    for face in face_results:
+                        face_x, face_y, face_w, face_h = face["bbox"]
+                        cv2.rectangle(person_roi, (face_x, face_y), (face_x + face_w, face_y + face_h), (0, 255, 0), 2)
+
+                        # Display recognition results here (if applicable)
+                        # ... Display recognition labels based on face_results ...
+                        if face_results:
+                            # cv2.putText(person_roi, "Face Detected", (face_x, face_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            print("Face Detected")
+
+                        else :
+                            # cv2.putText(person_roi, "Face Not Detected", (face_x, face_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            print("Face Not Detected")
+
+                    # Store tracking history
+                    track = track_history[track_id]
+                    track.append((int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2)))
+                    if len(track) > 30:
+                        track.pop(0)
+
+        # Draw tracking lines and labels
+        # ... Implement logic to draw tracking lines and labels based on track_history ...
+
+
+        # Write frame to output video
+        # result.write(frame)
+        
+        # Convert the resized frame to bytes and write it to ffmpeg's stdin
+        ffmpeg_process.stdin.write(frame_resized.tobytes())
+
+        # Handle user input for quitting
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    # Release resources
+    result.release()
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

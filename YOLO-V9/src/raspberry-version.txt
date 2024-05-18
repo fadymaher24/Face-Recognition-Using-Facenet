@@ -1,0 +1,170 @@
+import cv2
+from ultralytics import YOLO
+from ultralytics.utils.checks import check_imshow
+from ultralytics.utils.plotting import Annotator, colors
+
+from collections import defaultdict
+import dlib
+import numpy as np
+
+# Load YOLO model with type hints
+model: YOLO = YOLO("yolov9c.pt")
+names: list[str] = model.model.names
+
+# Load Haar cascade for face detection
+face_cascade: cv2.CascadeClassifier = cv2.CascadeClassifier(
+    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# Replace with your face recognition model (e.g., OpenCV, Dlib)
+def recognize_face(face: np.ndarray) -> str:
+    """
+    Perform face recognition using your model.
+
+    This is a dummy implementation for demonstration purposes.
+    Replace it with your actual face recognition logic.
+
+    Args:
+        face: A NumPy array representing the face region of interest (ROI).
+
+    Returns:
+        A string representing the recognized face name or "Unknown" if not recognized.
+    """
+    recognized_faces[str(face)] = "Person X"  # Dummy recognition result
+    return "Person X"  # Dummy recognition result
+
+# Initialize a dictionary to store recognized faces with type hints
+recognized_faces: dict[str, str] = {}
+
+
+def resize_frame(frame: np.ndarray, scale_percent: float) -> np.ndarray:
+    """
+    Resize an image by a percentage scale.
+
+    Args:
+        frame: A NumPy array representing the image to be resized.
+        scale_percent: A float representing the percentage scale (0-100).
+
+    Returns:
+        A NumPy array representing the resized image.
+    """
+    width = int(frame.shape[1] * scale_percent / 100)
+    height = int(frame.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    resized = cv2.resize(frame, dim, interpolation=cv2.INTER_AREA)
+    return resized
+
+
+def detect_faces(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """
+    Perform face detection using Haar cascades.
+
+    Args:
+        gray: A NumPy array representing the grayscale image.
+
+    Returns:
+        A list of tuples (x, y, w, h) representing the detected faces' bounding boxes.
+    """
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    return faces
+
+
+def main():
+    cap: cv2.VideoCapture = cv2.VideoCapture(0)  # Use the Pi camera (replace with your video source)
+    if not cap.isOpened():
+        print("Error opening video capture device.")
+        exit()
+
+    # Track history dictionary with type hints
+    track_history: defaultdict[int, list[tuple[int, int]]] = defaultdict(lambda: [])
+
+    while cap.isOpened():
+        success, frame = cap.read()
+        if not success:
+            print("Error reading frame from video capture.")
+            break
+        frame_resized = resize_frame(frame, 50)  # Resize frame to 50% for faster processing
+
+        # Perform YOLO object detection and tracking
+        results = model.track(frame, persist=True, verbose=False)
+        boxes = results[0].boxes.xyxy
+
+        if results[0].boxes.id is not None:
+            # Extract prediction results with type annotations
+            clss: list[int] = results[0].boxes.cls.tolist()
+            track_ids: list[int] = results[0].boxes.id.int().tolist()
+            confs: list[float] = results[0].boxes.conf.float().tolist()
+
+            # Annotator for drawing labels and boxes
+            annotator = Annotator(frame, line_width=2)
+
+            for box, cls, track_id in zip(boxes, clss, track_ids):
+                # Check if the detected class is "person" (or your desired class)
+                if names[int(cls)] == "person":
+
+                    # Draw bounding box
+                    # Draw bounding box and label
+                    annotator.box_label(box, color=colors(int(cls), True), label=f"{names[int(cls)]} (ID: {track_id})")
+
+                    # Extract the person's bounding box with type hints
+                    x1: int = int(box[0])
+                    y1: int = int(box[1])
+                    x2: int = int(box[2])
+                    y2: int = int(box[3])
+                    person_roi: np.ndarray = frame[y1:y2, x1:x2]
+
+                    # Convert to grayscale (MTCNN works better with grayscale)
+                    # Create a face detector object
+                    detector = dlib.get_frontal_face_detector()
+
+                    gray = cv2.cvtColor(person_roi, cv2.COLOR_BGR2GRAY)
+
+                    # Perform face detection on the person
+                    faces = detector(gray, 1)
+
+                    # Recognize faces (dummy function for face recognition)
+                    for face_rect in faces:
+                        # Convert dlib.rectangle to tuple
+                        face_x: int = face_rect.left()
+                        face_y: int = face_rect.top()
+                        face_w: int = face_rect.width()
+                        face_h: int = face_rect.height()
+
+                        # Draw bounding box around the face
+                        cv2.rectangle(person_roi, (face_x, face_y), (face_x + face_w, face_y + face_h), (0, 255, 0), 2)
+
+                        # Store tracking history
+                        track = track_history[track_id]
+                        centroid_x: int = int((box[0] + box[2]) / 2)
+                        centroid_y: int = int((box[1] + box[3]) / 2)
+                        track.append((centroid_x, centroid_y))
+                        if len(track) > 30:
+                            track.pop(0)
+
+
+        # Draw tracking lines and labels
+        for track_id, points in track_history.items():
+            points = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.circle(frame, points[-1][0], 7, (255, 0, 0), -1)
+            cv2.polylines(frame, [points], isClosed=False, color=(255, 0, 0), thickness=2)
+
+            # Get the recognized face name (or indicate if unknown)
+            recognized_face_name: str = recognized_faces.get(str(track_id), "Unknown")
+
+            # Draw text with the recognized face name
+            cv2.putText(frame, recognized_face_name, (points[-1][0][0], points[-1][0][1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+        # Display the frame
+        cv2.imshow('Frame', frame_resized)
+
+        # Handle user input for quitting
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    # Release resources
+    # result.release()  # Assuming result is not used
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

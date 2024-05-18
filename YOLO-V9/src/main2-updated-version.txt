@@ -1,0 +1,90 @@
+import cv2
+from ultralytics import YOLO
+from collections import defaultdict
+import dlib
+import subprocess
+
+def resize_frame(frame, scale_percent):
+    """Function to resize an image by a percentage scale."""
+    width = int(frame.shape[1] * scale_percent / 100)
+    height = int(frame.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    resized = cv2.resize(frame, dim, interpolation=cv2.INTER_AREA)
+    return resized
+
+def detect_and_recognize_faces(detector, gray, face):
+    """Detects and recognizes faces in a given image region using MTCNN."""
+    try:
+        (x, y, w, h) = face.rect.left(), face.rect.top(), face.rect.right(), face.rect.bottom()
+        MTCNN = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
+        landmarks = MTCNN(gray, face.rect)
+        return {"bbox": (x, y, w, h)}
+    except Exception as e:
+        print(f"Error during face detection/recognition: {e}")
+        return {}
+
+def main():
+    model = YOLO("yolov9c.pt")
+    names = model.model.names
+    detector = dlib.cnn_face_detection_model_v1('mmod_human_face_detector.dat')
+    cap = cv2.VideoCapture("People-Walking.mp4")
+    if not cap.isOpened():
+        print("Error opening video capture device.")
+        return
+
+    w, h, fps = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), cap.get(cv2.CAP_PROP_FPS)
+    output_video_file = 'object_tracking_with_recognition.mp4'
+
+    ffmpeg_cmd = [
+        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo', '-s', f'{w}x{h}', '-pix_fmt', 'bgr24', '-r', str(fps),
+        '-i', '-', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', output_video_file
+    ]
+    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+    track_history = defaultdict(lambda: [])
+    frame_count = 0
+
+    while cap.isOpened():
+        success, frame = cap.read()
+        if not success:
+            print("Error reading frame from video capture.")
+            break
+
+        frame_count += 1
+        if frame_count % 3 != 0:  # Process every 3rd frame
+            continue
+
+        frame_resized = resize_frame(frame, 50)  # Resize frame to 50% for faster processing
+
+        results = model.track(frame_resized, persist=True, verbose=False)
+        boxes = results[0].boxes.xyxy
+
+        for box in boxes:
+            x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+            person_roi = frame_resized[y1:y2, x1:x2]
+            gray = cv2.cvtColor(person_roi, cv2.COLOR_BGR2GRAY)
+            faces = detector(gray, 1)
+            face_results = [detect_and_recognize_faces(detector, gray, face) for face in faces]
+
+            for face in face_results:
+                face_x, face_y, face_w, face_h = face["bbox"]
+                cv2.rectangle(person_roi, (face_x, face_y), (face_x + face_w, face_y + face_h), (0, 255, 0), 2)
+
+                if face_results:
+                    print("Face Detected")
+                else:
+                    print("Face Not Detected")
+
+        # Convert the resized frame to bytes and write it to ffmpeg's stdin
+        ffmpeg_process.stdin.write(frame_resized.tobytes())
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    ffmpeg_process.stdin.close()
+    ffmpeg_process.wait()
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
