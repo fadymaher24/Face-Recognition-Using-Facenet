@@ -1,0 +1,9 @@
+/output
+/dataset/fady
+/data
+# ignore the following files 
+mmod_human_face_detector.dat
+shape_predictor_68_face_landmarks.dat
+nn4.small2.v1.t7
+# yolov9c.pt
+!models/haarcascade_frontalface_default.xml
